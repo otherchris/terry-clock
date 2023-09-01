@@ -5,8 +5,9 @@
 #![no_main]
 
 use core::fmt::Write;
+use heapless::String;
 // WHAT DO THESE DO
-use defmt::*;
+use defmt::info;
 use defmt_rtt as _;
 use panic_probe as _;
 
@@ -14,25 +15,25 @@ mod modules;
 use core::cell::RefCell;
 
 // Board support
-use rp_pico as bsp;
 use bsp::{
     entry,
     hal::clocks::{init_clocks_and_plls, Clock},
+    hal::gpio::Pins,
+    hal::i2c::I2C,
     hal::pac,
     hal::sio::Sio,
-    hal::timer::Timer,
     hal::timer::Alarm,
-    hal::gpio::Pins,
+    hal::timer::Timer,
     hal::watchdog::Watchdog,
-    hal::i2c::I2C,
 };
-use embedded_hal::digital::v2::OutputPin;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     prelude::*,
     text::{Baseline, Text},
 };
+use embedded_hal::digital::v2::OutputPin;
+use rp_pico as bsp;
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
 use critical_section::Mutex;
@@ -75,16 +76,30 @@ fn main() -> ! {
     let pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut resets);
     let mut timer = Timer::new(pac.TIMER, &mut resets);
 
-    let rotary_dt = pins.gpio15.into_pull_up_input();
-    let rotary_clk = pins.gpio14.into_pull_up_input();
-    let rotary_encoder = RotaryEncoder::new(rotary_dt, rotary_clk).into_standard_mode();
-
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_1);
     }
 
     critical_section::with(|cs| {
+        let rotary_dt = pins.gpio15.into_pull_up_input();
+        let rotary_clk = pins.gpio14.into_pull_up_input();
+        let rotary_encoder = RotaryEncoder::new(rotary_dt, rotary_clk).into_standard_mode();
+
+        let i2c = I2C::i2c0(
+            pac.I2C0,
+            pins.gpio12.into_mode(),
+            pins.gpio13.into_mode(),
+            150.kHz(),
+            &mut resets,
+            external_xtal_freq_hz.Hz(),
+        );
+
+        let interface = I2CDisplayInterface::new(i2c);
+        let mut display = Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0)
+            .into_terminal_mode();
+        display.init().unwrap();
+
         let led = pins.gpio7.into_push_pull_output();
         let mut encoder_poll_alarm = timer.alarm_0().unwrap();
         let _ = encoder_poll_alarm.schedule(ENCODER_POLL_FREQUENCY);
@@ -96,6 +111,7 @@ fn main() -> ! {
 
         unsafe {
             MODULE_STATE.borrow(cs).replace(Some((
+                display,
                 led,
                 500,
                 false,
@@ -106,32 +122,12 @@ fn main() -> ! {
         }
     });
 
-     let i2c = I2C::i2c0(
-        pac.I2C0,
-        pins.gpio12.into_mode(),
-        pins.gpio13.into_mode(),
-        150.kHz(),
-        &mut resets,
-        external_xtal_freq_hz.Hz(),
-    );
-
-    let interface = I2CDisplayInterface::new(i2c);
-     let mut display =
-        Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode();
-    display.init().unwrap();
-    let _ = display.clear();
-    let _ = display.write_str("this is \na message...");
-
     /* Endless loop */
-    loop {
-        // for c in 97..123 {
-        //     let _ = display.write_str(unsafe { core::str::from_utf8_unchecked(&[c]) });
-        // }
-        // for c in 65..91 {
-        //     let _ = display.write_str(unsafe { core::str::from_utf8_unchecked(&[c]) });
-        // }
-    }
     loop {}
+}
+
+fn delay_in_millis_to_bpm(delay: u32) -> u32 {
+    60_000 / delay
 }
 
 // Handle encoder data when encoder_poll_alarm
@@ -139,8 +135,15 @@ fn main() -> ! {
 fn TIMER_IRQ_0() {
     critical_section::with(|cs| {
         let module_state = unsafe { MODULE_STATE.borrow(cs).take() };
-        if let Some((led, mut rate, pulse_flag, mut encoder_poll_alarm, pulse_alarm, mut encoder)) =
-            module_state
+        if let Some((
+            mut display,
+            led,
+            mut rate,
+            pulse_flag,
+            mut encoder_poll_alarm,
+            pulse_alarm,
+            mut encoder,
+        )) = module_state
         {
             // Clear the alarm interrupt or this interrupt service routine will keep firing
             encoder_poll_alarm.clear_interrupt();
@@ -150,13 +153,21 @@ fn TIMER_IRQ_0() {
             match encoder.direction() {
                 Direction::Clockwise => {
                     if rate > 20 {
-                        rate -= 20
+                        rate -= 4
                     }
+                    let mut data = String::<32>::new();
+                    let _ = write!(data, "BeaPi M: {}", delay_in_millis_to_bpm(rate));
+                    let _ = display.clear();
+                    let _ = display.write_str(&data);
                 }
                 Direction::Anticlockwise => {
                     if rate < 5000 {
-                        rate += 20
+                        rate += 4
                     }
+                    let mut data = String::<32>::new();
+                    let _ = write!(data, "BeaPi M: {}", delay_in_millis_to_bpm(rate));
+                    let _ = display.clear();
+                    let _ = display.write_str(&data);
                 }
                 Direction::None => {
                     // Do nothing
@@ -165,6 +176,7 @@ fn TIMER_IRQ_0() {
             unsafe {
                 MODULE_STATE.borrow(cs).replace_with(|_| {
                     Some((
+                        display,
                         led,
                         rate,
                         pulse_flag,
@@ -183,8 +195,15 @@ fn TIMER_IRQ_0() {
 fn TIMER_IRQ_1() {
     critical_section::with(|cs| {
         let module_state = unsafe { MODULE_STATE.borrow(cs).take() };
-        if let Some((mut led, rate, mut pulse_flag, encoder_poll_alarm, mut pulse_alarm, encoder)) =
-            module_state
+        if let Some((
+            display,
+            mut led,
+            rate,
+            mut pulse_flag,
+            encoder_poll_alarm,
+            mut pulse_alarm,
+            encoder,
+        )) = module_state
         {
             pulse_alarm.clear_interrupt();
             if pulse_flag {
@@ -199,6 +218,7 @@ fn TIMER_IRQ_1() {
             unsafe {
                 MODULE_STATE.borrow(cs).replace_with(|_| {
                     Some((
+                        display,
                         led,
                         rate,
                         pulse_flag,
