@@ -1,13 +1,13 @@
 use rotary_encoder_embedded::{standard::StandardMode, RotaryEncoder};
 use rp_pico as bsp;
 use bsp::hal::{
-    gpio::bank0::Gpio0, gpio::bank0::Gpio16, gpio::bank0::Gpio17, gpio::Input, gpio::Output,
+    gpio::bank0::Gpio7, gpio::bank0::Gpio14, gpio::bank0::Gpio15, gpio::Input, gpio::Output,
     gpio::Pin, gpio::PullUp, gpio::PushPull,
 };
 
 pub type MetronomeState = (
     // led pin
-    Pin<Gpio0, Output<PushPull>>,
+    Pin<Gpio7, Output<PushPull>>,
     // beat duration in millis
     u32,
     // Flag for pulse
@@ -17,5 +17,5 @@ pub type MetronomeState = (
     // Alarm for next pulse
     rp2040_hal::timer::Alarm1,
     // Rotary encoder
-    RotaryEncoder<StandardMode, Pin<Gpio17, Input<PullUp>>, Pin<Gpio16, Input<PullUp>>>,
+    RotaryEncoder<StandardMode, Pin<Gpio15, Input<PullUp>>, Pin<Gpio14, Input<PullUp>>>,
 );

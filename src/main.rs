@@ -4,6 +4,7 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::Write;
 // WHAT DO THESE DO
 use defmt::*;
 use defmt_rtt as _;
@@ -23,11 +24,19 @@ use bsp::{
     hal::timer::Alarm,
     hal::gpio::Pins,
     hal::watchdog::Watchdog,
+    hal::i2c::I2C,
 };
 use embedded_hal::digital::v2::OutputPin;
+use embedded_graphics::{
+    mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
+    pixelcolor::BinaryColor,
+    prelude::*,
+    text::{Baseline, Text},
+};
+use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
 use critical_section::Mutex;
-use fugit::MicrosDurationU32;
+use fugit::{MicrosDurationU32, RateExtU32};
 use pac::interrupt;
 use rotary_encoder_embedded::{Direction, RotaryEncoder};
 
@@ -60,16 +69,14 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    info!("here");
-
     // External high-speed crystal on the pico board is 12Mhz
     let external_xtal_freq_hz = 12_000_000u32;
 
     let pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut resets);
     let mut timer = Timer::new(pac.TIMER, &mut resets);
 
-    let rotary_dt = pins.gpio17.into_pull_up_input();
-    let rotary_clk = pins.gpio16.into_pull_up_input();
+    let rotary_dt = pins.gpio15.into_pull_up_input();
+    let rotary_clk = pins.gpio14.into_pull_up_input();
     let rotary_encoder = RotaryEncoder::new(rotary_dt, rotary_clk).into_standard_mode();
 
     unsafe {
@@ -78,7 +85,7 @@ fn main() -> ! {
     }
 
     critical_section::with(|cs| {
-        let led = pins.gpio0.into_push_pull_output();
+        let led = pins.gpio7.into_push_pull_output();
         let mut encoder_poll_alarm = timer.alarm_0().unwrap();
         let _ = encoder_poll_alarm.schedule(ENCODER_POLL_FREQUENCY);
 
@@ -99,6 +106,31 @@ fn main() -> ! {
         }
     });
 
+     let i2c = I2C::i2c0(
+        pac.I2C0,
+        pins.gpio12.into_mode(),
+        pins.gpio13.into_mode(),
+        150.kHz(),
+        &mut resets,
+        external_xtal_freq_hz.Hz(),
+    );
+
+    let interface = I2CDisplayInterface::new(i2c);
+     let mut display =
+        Ssd1306::new(interface, DisplaySize128x32, DisplayRotation::Rotate0).into_terminal_mode();
+    display.init().unwrap();
+    let _ = display.clear();
+    let _ = display.write_str("this is \na message...");
+
+    /* Endless loop */
+    loop {
+        // for c in 97..123 {
+        //     let _ = display.write_str(unsafe { core::str::from_utf8_unchecked(&[c]) });
+        // }
+        // for c in 65..91 {
+        //     let _ = display.write_str(unsafe { core::str::from_utf8_unchecked(&[c]) });
+        // }
+    }
     loop {}
 }
 
